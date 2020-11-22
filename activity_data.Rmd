@@ -1,0 +1,104 @@
+---
+title: "Activity_data"
+author: "iskren89"
+date: "11/22/2020"
+output: html_document
+---
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+```
+# Loading and cleaning the data  
+We load the libraries:  
+```{r echo=FALSE}
+library(caret)
+library(e1071)
+library(randomForest)
+```
+We load the data  
+```{r}
+testing<-read.csv("pml-testing.csv")
+training<-read.csv("pml-training.csv")
+```
+We look at how much missing data is in each column:  
+```{r}
+na_count <-sapply(training, function(y) sum(length(which(is.na(y)))))
+na_count <- data.frame(na_count)
+View(na_count)
+```
+We see that there are a lot of columns where most of the observations are either missing, NA or #DIV/0!. We load the data again and filter those columns out so that we are left with the columns with no missing data.  
+```{r}
+testing<-read.csv("pml-testing.csv", na.strings = c("NA", "", "#DIV/0!"))
+training<-read.csv("pml-training.csv", na.strings = c("NA", "", "#DIV/0!"))
+na_count <-sapply(training, function(y) sum(length(which(is.na(y)))))
+na_count <- data.frame(na_count)
+train<-training[,na_count==0]
+na_count2 <-sapply(testing, function(y) sum(length(which(is.na(y)))))
+na_count2 <- data.frame(na_count2)
+test<-testing[,na_count==0]
+```
+Let's look at the cleaned data:  
+```{r}
+str(train)
+dim(train)
+```
+We see that we have 60 columns and the first 7 columns describe who is performing the movement and when, etc.  
+```{r}
+levels(train$user_name)
+levels(test$user_name)
+```
+We see that the study had 6 participants. The dataset description states that: "Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate". Therefore, who (and when) the movement is performed should have no effect on the classe of movement performed. Otherwise we will have to split the testing data into six and make a separate prediction model for each participant, which will have no value. A "Human Activity Recognition" study is useful, but "Jeremy's Activity Recognition" is not that useful :), as it will not help us make predictions for other people beside those six participants. That's why we will assume that participants were well supervised and their personal biases were corrected by the trainers. Thus, to predict classe (column 60) we can focus our efforts only on the actual accelerometer data (columns 8 to 59) and we can filter out columns 1 to 7.  
+```{r}
+train_clean<-train[,-c(1:7)]
+test_clean<-test[,-c(1:7)]
+```
+# Split the data  
+For cross validation, and since our training dataset is quite large (almost 20,000 observations) while our testing dataset is quite small (only 20 observations), I will split the training dataset in two in order to test different prediction algorithms and pick the best performing one.  
+```{r}
+inTrain <- createDataPartition(train_clean$classe, p = 0.7, list = FALSE)
+train_part <- train_clean[inTrain,]
+crossv_part <- train[-inTrain,]
+```
+# Analysis  
+Since one of the main benefits of the random forests prediction method is its accuracy we will try it here. One of the main drawbacks is the long computational time. I am doing this on an old laptop, so I have to train my model on a smaller dataset. However, the principles remain the same.   
+```{r}
+inTrain2 <- createDataPartition(train_clean$classe, p = 0.15, list = FALSE)
+train_part2 <- train_clean[inTrain2,]
+crossv_part2 <- train[-inTrain2,]
+model_rf <- train(classe ~ ., data = train_part2, method = "rf")
+valid_rf <- predict(model_rf, newdata = crossv_part2)
+result <-confusionMatrix(crossv_part2$classe,valid_rf)
+result
+```
+We see that using just 15% of the data (apologies, but my laptop will explode if I use the full dataset) the random forest method has an accuracy of 96%. In this case the out of sample error rate is 4%. Since I use 15% of the data to predict the remaining 85%, I am sure that a model trained on 70%+ of the data will have an accuracy of more than 99%.   
+Using the reduced dataset (this method was also taking a lot of time on my poor old laptop), let's try the Generalized Boosted Regression Model.   
+```{r}
+model_gbm <- train(classe ~ ., data = train_part2, method = "gbm", verbose=FALSE)
+valid_gbm<-predict(model_gbm, newdata=crossv_part2)
+result2<-confusionMatrix(crossv_part2$classe,valid_gbm)
+result2
+```
+We see that here the accuracy is quite good too - 94%, so the expected out of sample error rate will be 6%.   
+Let's look at the Linear Discriminant Analysis method:   
+```{r}
+model_lda <- train(classe ~ ., data = train_part, method = "lda")
+valid_lda <- predict(model_lda, newdata=crossv_part)
+result3 <- confusionMatrix(crossv_part$classe,valid_lda)
+result3
+```
+While much faster (I was able to use the full dataset), the accuracy here is not that good - only 70%.   
+Let's try the Decision Tree method:  
+```{r}
+model_rpart <- train(classe ~ ., data = train_part, method = "rpart")
+valid_rpart <- predict(model_rpart, newdata=crossv_part)
+result4 <- confusionMatrix(crossv_part$classe,valid_rpart)
+result4
+```
+While fast, we see that the accuracy for this method is quite poor 49%, so perhaps it is not the best choice here.  
+  
+# Summary  
+Overall, it looks like the random forest and generalized boosted regression model performed the best from the methods I tried, with the random forest method having a slight edge. The main drawback of those methods are that they are quite slow (unfortunately I had to use a smaller dataset with just 15% of the data to train my models). Using the random forest method to answer the quiz:  
+```{r}
+quiz <- predict(model_rf, newdata = test_clean)
+quiz
+```
+(Note: I got 95% on the quiz, in line with the accuracy suggested by the cross validation)
